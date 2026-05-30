@@ -254,6 +254,7 @@ function entryColor(entry) {
   return { bg: 'bg-blue-50 text-blue-800 border-blue-200', text: 'text-blue-800', border: 'border-l-blue-500', dot: 'bg-blue-500' };
 }
 
+// Helper getter functions
 function getDoctor(data, id) { return data.doctors.find(d => d.id === id); }
 function getStaff(data, sid) {
   if (!sid) return null;
@@ -901,6 +902,14 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
   const isAutoNext = !!form.parentRecordId;
   const isExplanationEntry = entryKind === 'explanation';
   const examTypeLocked = isExplanationEntry || isAutoNext;
+  const examPatient = data.patients.find(p => p.id === form.patientId);
+  const customExam = examPatient?.assignedExams?.find(ae => ae.examTypeId === form.examTypeId);
+  
+  // Calculate interval to display as notice
+  const activeInterval = customExam && customExam.intervalDays > 0 
+    ? customExam.intervalDays 
+    : (examType?.intervalDays || 0);
+
   const canSave = form.patientId && form.examTypeId && form.examDate;
 
   const handleSave = () => {
@@ -955,14 +964,14 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
             hint={
               isExplanationEntry ? '검사 종류는 검사 일정에서만 변경할 수 있습니다.'
               : isAutoNext ? '자동 예약 검사는 원본 검사의 종류와 자동 동기화됩니다.'
-              : (examType?.intervalDays ? `표준 간격: ${examType.intervalDays}일` : undefined)
+              : (activeInterval ? `이 환자의 예약 주기: ${activeInterval}일` : undefined)
             }
           >
             <Select
               placeholder="검사 선택"
               value={form.examTypeId}
               onChange={v => set('examTypeId', v)}
-              options={data.examTypes.map(e => ({ value: e.id, label: `${e.name}${e.intervalDays ? ` (${e.intervalDays}일 간격)` : ''}` }))}
+              options={data.examTypes.map(e => ({ value: e.id, label: `${e.name}` }))}
               className="w-full"
               disabled={examTypeLocked}
             />
@@ -1066,12 +1075,12 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
           />
         </Field>
 
-        {!isEdit && examType?.intervalDays > 0 && form.examDate && (
+        {!isEdit && activeInterval > 0 && form.examDate && (
           <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
             <Repeat className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
               <div className="font-semibold">자동 예약 알림</div>
-              <div className="mt-0.5">검사 종료 후 <strong>{examType.intervalDays}일 뒤</strong>인 <strong>{addDays(form.examDate, examType.intervalDays)}</strong>에 다음 검사가 자동으로 캘린더에 표시됩니다.</div>
+              <div className="mt-0.5">검사 종료 후 <strong>{activeInterval}일 뒤</strong>인 <strong>{addDays(form.examDate, activeInterval)}</strong>에 다음 검사가 자동으로 캘린더에 표시됩니다.</div>
             </div>
           </div>
         )}
@@ -1101,6 +1110,7 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
   const [chartNumber, setChartNumber] = useState('');
   const [birth6, setBirth6] = useState('');
   const [depts, setDepts] = useState([]);
+  const [assignedExams, setAssignedExams] = useState([]);
   const [confirmDel, setConfirmDel] = useState(null);
 
   const openAdd = () => {
@@ -1109,6 +1119,7 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
     setChartNumber('');
     setBirth6('');
     setDepts([]);
+    setAssignedExams([]);
     setModalOpen(true);
   };
 
@@ -1118,7 +1129,25 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
     setChartNumber(p.chartNumber || '');
     setBirth6(p.birth6 || '');
     setDepts(p.departments || (p.department ? [p.department] : []));
+    setAssignedExams(p.assignedExams || []);
     setModalOpen(true);
+  };
+
+  const handleToggleExam = (examTypeId, defaultInterval) => {
+    setAssignedExams(prev => {
+      const exists = prev.some(ae => ae.examTypeId === examTypeId);
+      if (exists) {
+        return prev.filter(ae => ae.examTypeId !== examTypeId);
+      } else {
+        return [...prev, { examTypeId, intervalDays: defaultInterval || 365 }];
+      }
+    });
+  };
+
+  const handleUpdateInterval = (examTypeId, days) => {
+    setAssignedExams(prev => 
+      prev.map(ae => ae.examTypeId === examTypeId ? { ...ae, intervalDays: parseInt(days, 10) || 0 } : ae)
+    );
   };
 
   const handleSave = () => {
@@ -1128,7 +1157,8 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
       initials,
       chartNumber,
       birth6,
-      departments: depts
+      departments: depts,
+      assignedExams
     });
     setModalOpen(false);
   };
@@ -1170,6 +1200,7 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
                   <th className="px-5 py-3.5">차트번호</th>
                   <th className="px-5 py-3.5">생년월일(6자리)</th>
                   <th className="px-5 py-3.5">진료과</th>
+                  <th className="px-5 py-3.5">맞춤 검사 주기</th>
                   <th className="px-5 py-3.5 text-right">관리</th>
                 </tr>
               </thead>
@@ -1189,6 +1220,23 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
                                 {d}
                               </span>
                             ))
+                          ) : (
+                            <span className="text-slate-400 text-xs">-</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex flex-wrap gap-1 max-w-xs">
+                          {p.assignedExams && p.assignedExams.length > 0 ? (
+                            p.assignedExams.map(ae => {
+                              const eType = data.examTypes.find(x => x.id === ae.examTypeId);
+                              if (!eType) return null;
+                              return (
+                                <span key={ae.examTypeId} className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-amber-50 text-amber-800 rounded border border-amber-200 text-[10px] font-bold">
+                                  {eType.name}: {ae.intervalDays}일
+                                </span>
+                              );
+                            })
                           ) : (
                             <span className="text-slate-400 text-xs">-</span>
                           )}
@@ -1262,6 +1310,51 @@ function PatientsView({ data, onSavePatient, onDeletePatient }) {
               className="w-full"
             />
           </Field>
+          
+          <div className="border-t border-slate-200 pt-4 mt-2">
+            <div className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
+              <ClipboardList className="w-3.5 h-3.5 text-indigo-600" />
+              <span>관리 대상 검사 및 맞춤 주기 설정 (선택)</span>
+            </div>
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              {data.examTypes.map(t => {
+                const assigned = assignedExams.find(ae => ae.examTypeId === t.id);
+                const isChecked = !!assigned;
+                const interval = assigned ? assigned.intervalDays : (t.intervalDays || 0);
+                
+                return (
+                  <div key={t.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => handleToggleExam(t.id, t.intervalDays)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>{t.name}</span>
+                    </label>
+                    {isChecked && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] text-slate-500 font-medium">검사 주기:</span>
+                        <input
+                          type="number"
+                          value={interval}
+                          onChange={e => handleUpdateInterval(t.id, e.target.value)}
+                          className="w-20 px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white text-slate-900 font-bold text-right"
+                          placeholder="일수"
+                          min="0"
+                        />
+                        <span className="text-[10px] text-slate-600 font-semibold">일</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {data.examTypes.length === 0 && (
+                <div className="text-center py-4 text-xs text-slate-400">등록된 검사 종류가 없습니다. 먼저 검사 종류를 추가하세요.</div>
+              )}
+            </div>
+          </div>
         </div>
       </Modal>
     </div>
@@ -1500,7 +1593,7 @@ function ExamTypesView({ data, onSaveExamType, onDeleteExamType }) {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-xs uppercase tracking-wider">
                 <th className="px-5 py-3.5">검사명</th>
-                <th className="px-5 py-3.5">표준 권장 간격 (일)</th>
+                <th className="px-5 py-3.5">표준 기본 권장 간격 (일)</th>
                 <th className="px-5 py-3.5 text-right">관리</th>
               </tr>
             </thead>
@@ -1558,7 +1651,7 @@ function ExamTypesView({ data, onSaveExamType, onDeleteExamType }) {
               onChange={e => setName(e.target.value)}
             />
           </Field>
-          <Field label="표준 권장 재검사 간격 (일)" hint="검사가 완료되면 이 일수 뒤에 다음 검사 일정이 자동으로 생성됩니다. 0 또는 비워두면 자동 예약이 비활성화됩니다.">
+          <Field label="기본 권장 재검사 간격 (일)" hint="개별 환자 설정에 맞춤 주기가 지정되지 않았을 때 적용되는 기본 권장 주기입니다.">
             <Input
               type="number"
               placeholder="예: 365"
@@ -1847,10 +1940,10 @@ function getSampleData() {
     { id: 'et4', name: '심전도검사', intervalDays: 90 },
   ];
   const pats = [
-    { id: 'pat1', initials: '김태형', chartNumber: 'C001', birth6: '880315', departments: ['1내과', '침구과'] },
-    { id: 'pat2', initials: '이지혜', chartNumber: 'C002', birth6: '941205', departments: ['2내과'] },
-    { id: 'pat3', initials: '박성호', chartNumber: 'C003', birth6: '720610', departments: ['한방재활의학 1과'] },
-    { id: 'pat4', initials: '최정순', chartNumber: 'C004', birth6: '580922', departments: ['1내과', '침구과', '부인소아과'] },
+    { id: 'pat1', initials: '김태형', chartNumber: 'C001', birth6: '880315', departments: ['1내과', '침구과'], assignedExams: [{ examTypeId: 'et1', intervalDays: 180 }] },
+    { id: 'pat2', initials: '이지혜', chartNumber: 'C002', birth6: '941205', departments: ['2내과'], assignedExams: [] },
+    { id: 'pat3', initials: '박성호', chartNumber: 'C003', birth6: '720610', departments: ['한방재활의학 1과'], assignedExams: [{ examTypeId: 'et3', intervalDays: 90 }] },
+    { id: 'pat4', initials: '최정순', chartNumber: 'C004', birth6: '580922', departments: ['1내과', '침구과', '부인소아과'], assignedExams: [] },
   ];
 
   const tDate = today();
@@ -1881,7 +1974,7 @@ function getSampleData() {
       id: 'rec2',
       patientId: 'pat1',
       examTypeId: 'et1',
-      examDate: addDays(yDate, 365),
+      examDate: addDays(yDate, 180), // Custom interval applied: 180 days!
       examTime: '09:00',
       examStatus: 'scheduled',
       orderDoctorId: 'doc1',
@@ -1891,7 +1984,7 @@ function getSampleData() {
       primaryExplDoctorId: '',
       secondaryExplDoctorId: '',
       explanationStatus: 'none',
-      notes: '이전 검사 완료에 따라 표준 간격 이후 자동 생성된 일정입니다.',
+      notes: '이전 검사 완료에 따라 맞춤 주기(180일) 이후 자동 생성된 일정입니다.',
       parentRecordId: 'rec1',
       autoNextGenerated: false,
     },
@@ -2050,15 +2143,27 @@ export default function App() {
     };
   }, []);
 
-  // Process auto scheduling for recursively recurring exams
+  // Process auto scheduling for recursively recurring exams using custom patient interval if available
   const processAutoNext = (record, currentData) => {
     if (record.examStatus !== 'completed') return null;
     if (record.autoNextGenerated) return null;
     
-    const examType = currentData.examTypes.find(t => t.id === record.examTypeId);
-    if (!examType || !examType.intervalDays || examType.intervalDays <= 0) return null;
+    const patient = currentData.patients.find(p => p.id === record.patientId);
+    const customExam = patient?.assignedExams?.find(ae => ae.examTypeId === record.examTypeId);
+    
+    let interval = 0;
+    if (customExam && customExam.intervalDays > 0) {
+      interval = customExam.intervalDays;
+    } else {
+      const examType = currentData.examTypes.find(t => t.id === record.examTypeId);
+      if (examType && examType.intervalDays > 0) {
+        interval = examType.intervalDays;
+      }
+    }
 
-    const nextDate = addDays(record.examDate, examType.intervalDays);
+    if (interval <= 0) return null;
+
+    const nextDate = addDays(record.examDate, interval);
     const newRecordId = uid();
     
     return {
@@ -2075,7 +2180,7 @@ export default function App() {
       primaryExplDoctorId: '',
       secondaryExplDoctorId: '',
       explanationStatus: 'none',
-      notes: '이전 검사 완료에 따라 표준 간격 이후 자동 생성된 일정입니다.',
+      notes: `이전 검사 완료에 따라 맞춤 주기(${interval}일) 이후 자동 생성된 일정입니다.`,
       parentRecordId: record.id,
       autoNextGenerated: false,
     };
@@ -2415,7 +2520,7 @@ export default function App() {
         </nav>
 
         <div className="pt-4 border-t border-slate-800 mt-auto text-[11px] text-slate-500 shrink-0">
-          Medical Exam Scheduler v2.5 (Supabase Sync)
+          Medical Exam Scheduler v2.6 (Custom Interval)
         </div>
       </aside>
 
