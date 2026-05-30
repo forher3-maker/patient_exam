@@ -7,32 +7,7 @@ import {
   Repeat, Hospital, MessageSquare, ChevronDown, LayoutGrid, List,
   Download, Upload, Database, Move, Menu
 } from 'lucide-react';
-
-// ====== Storage ======
-const SHARED = true;
-const KEY = 'med_exam_data_v2';
-
-const loadData = async () => {
-  try {
-    if (window.storage && typeof window.storage.get === 'function') {
-      const r = await window.storage.get(KEY, SHARED);
-      return r ? JSON.parse(r.value) : null;
-    }
-    const local = localStorage.getItem(KEY);
-    return local ? JSON.parse(local) : null;
-  } catch { return null; }
-};
-
-const saveData = async (d) => {
-  try {
-    if (window.storage && typeof window.storage.set === 'function') {
-      await window.storage.set(KEY, JSON.stringify(d), SHARED);
-      return true;
-    }
-    localStorage.setItem(KEY, JSON.stringify(d));
-    return true;
-  } catch (e) { console.error('Storage save error:', e); return false; }
-};
+import { supabase } from './supabaseClient';
 
 // ====== Utils ======
 const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -1092,7 +1067,7 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
         </Field>
 
         {!isEdit && examType?.intervalDays > 0 && form.examDate && (
-          <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 animate-pulse">
+          <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
             <Repeat className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
               <div className="font-semibold">자동 예약 알림</div>
@@ -1535,7 +1510,7 @@ function ExamTypesView({ data, onSaveExamType, onDeleteExamType }) {
                   <td className="px-5 py-3.5 font-bold text-slate-900">{t.name}</td>
                   <td className="px-5 py-3.5 font-mono text-xs">
                     {t.intervalDays && t.intervalDays > 0 ? (
-                      <span className="inline-flex items-center gap-1 bg-amber-55 text-amber-800 px-2 py-0.5 rounded font-semibold bg-amber-50">
+                      <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 px-2 py-0.5 rounded font-semibold">
                         <Repeat className="w-3.5 h-3.5 text-amber-600" /> {t.intervalDays}일 간격
                       </span>
                     ) : (
@@ -1712,7 +1687,7 @@ function StatsView({ data }) {
                       <span>{count}건 ({Math.round(percentage)}%)</span>
                     </div>
                     <div className="bg-slate-100 w-full h-2.5 rounded-full overflow-hidden">
-                      <div className="bg-blue-600 h-full rounded-full animate-all duration-300" style={{ width: `${percentage}%` }} />
+                      <div className="bg-blue-600 h-full rounded-full transition-all duration-300" style={{ width: `${percentage}%` }} />
                     </div>
                   </div>
                 );
@@ -1738,7 +1713,7 @@ function StatsView({ data }) {
                       <span>{count}건 ({Math.round(percentage)}%)</span>
                     </div>
                     <div className="bg-slate-100 w-full h-2.5 rounded-full overflow-hidden">
-                      <div className="bg-indigo-600 h-full rounded-full animate-all duration-300" style={{ width: `${percentage}%` }} />
+                      <div className="bg-indigo-600 h-full rounded-full transition-all duration-300" style={{ width: `${percentage}%` }} />
                     </div>
                   </div>
                 );
@@ -1999,28 +1974,81 @@ export default function App() {
   const [defaultTime, setDefaultTime] = useState('');
   const [selectedEntryKind, setSelectedEntryKind] = useState('exam');
 
+  // Load all data from Supabase
+  const loadAllFromSupabase = async () => {
+    const [pats, docs, nurs, etypes, recs] = await Promise.all([
+      supabase.from('patients').select('*'),
+      supabase.from('doctors').select('*'),
+      supabase.from('nurses').select('*'),
+      supabase.from('exam_types').select('*'),
+      supabase.from('records').select('*')
+    ]);
+    
+    if (pats.error || docs.error || nurs.error || etypes.error || recs.error) {
+      const err = pats.error || docs.error || nurs.error || etypes.error || recs.error;
+      console.error("Error loading data from Supabase:", err);
+      throw err;
+    }
+    
+    return {
+      patients: pats.data || [],
+      doctors: docs.data || [],
+      nurses: nurs.data || [],
+      examTypes: etypes.data || [],
+      records: recs.data || []
+    };
+  };
+
+  const refetchAllData = async () => {
+    try {
+      const d = await loadAllFromSupabase();
+      setData(d);
+    } catch (err) {
+      console.error("Background refetch failed:", err);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
-      const d = await loadData();
-      if (d && d.patients && d.records) {
-        setData(d);
-      } else {
-        const sample = getSampleData();
-        setData(sample);
-        await saveData(sample);
+      try {
+        const d = await loadAllFromSupabase();
+        // If the database is completely empty, initialize it with sample data
+        if (d.patients.length === 0 && d.doctors.length === 0 && d.examTypes.length === 0) {
+          console.log("Supabase database empty. Inserting sample data...");
+          const sample = getSampleData();
+          await Promise.all([
+            supabase.from('doctors').insert(sample.doctors),
+            supabase.from('nurses').insert(sample.nurses),
+            supabase.from('exam_types').insert(sample.examTypes),
+            supabase.from('patients').insert(sample.patients)
+          ]);
+          await supabase.from('records').insert(sample.records);
+          const freshData = await loadAllFromSupabase();
+          setData(freshData);
+        } else {
+          setData(d);
+        }
+      } catch (err) {
+        console.error("Initialization failed, check your Supabase credentials.", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
+    
     init();
-  }, []);
 
-  const updateData = async (updater) => {
-    setData(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      saveData(next);
-      return next;
-    });
-  };
+    // Subscribe to realtime database changes
+    const channel = supabase
+      .channel('public-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        refetchAllData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Process auto scheduling for recursively recurring exams
   const processAutoNext = (record, currentData) => {
@@ -2054,151 +2082,292 @@ export default function App() {
   };
 
   // Record operations
-  const handleSaveRecord = (r) => {
-    updateData(prev => {
-      let updatedRecords = [...prev.records];
-      let newAutoRecord = null;
+  const handleSaveRecord = async (r) => {
+    let recordToSave = { ...r };
+    let newAutoRecord = null;
 
-      if (r.id) {
-        const oldRecord = updatedRecords.find(x => x.id === r.id);
-        const autoGenNeeded = r.examStatus === 'completed' && (!oldRecord || oldRecord.examStatus !== 'completed');
-        
-        let finalRecord = { ...r };
-        if (autoGenNeeded) {
-          newAutoRecord = processAutoNext(finalRecord, prev);
-          if (newAutoRecord) finalRecord.autoNextGenerated = true;
-        }
-        updatedRecords = updatedRecords.map(x => x.id === r.id ? finalRecord : x);
-      } else {
-        let finalRecord = { ...r, id: uid() };
-        if (finalRecord.examStatus === 'completed') {
-          newAutoRecord = processAutoNext(finalRecord, prev);
-          if (newAutoRecord) finalRecord.autoNextGenerated = true;
-        }
-        updatedRecords.push(finalRecord);
+    if (!recordToSave.id) {
+      recordToSave.id = uid();
+    }
+
+    const isEdit = !!r.id;
+    if (isEdit) {
+      const oldRecord = data.records.find(x => x.id === r.id);
+      const autoGenNeeded = r.examStatus === 'completed' && (!oldRecord || oldRecord.examStatus !== 'completed');
+      
+      if (autoGenNeeded) {
+        newAutoRecord = processAutoNext(recordToSave, data);
+        if (newAutoRecord) recordToSave.autoNextGenerated = true;
       }
+    } else {
+      if (recordToSave.examStatus === 'completed') {
+        newAutoRecord = processAutoNext(recordToSave, data);
+        if (newAutoRecord) recordToSave.autoNextGenerated = true;
+      }
+    }
+
+    try {
+      const { error } = await supabase.from('records').upsert(recordToSave);
+      if (error) throw error;
 
       if (newAutoRecord) {
-        updatedRecords.push(newAutoRecord);
+        const { error: autoError } = await supabase.from('records').insert(newAutoRecord);
+        if (autoError) throw autoError;
       }
 
-      return { ...prev, records: updatedRecords };
-    });
+      refetchAllData();
+    } catch (err) {
+      console.error("Error saving record:", err);
+      alert("일정을 저장하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleDeleteRecord = (id) => {
-    updateData(prev => {
-      const updatedRecords = prev.records.filter(r => r.id !== id).map(r => {
-        if (r.parentRecordId === id) {
-          return { ...r, parentRecordId: null };
-        }
-        return r;
-      });
-      return { ...prev, records: updatedRecords };
-    });
+  const handleDeleteRecord = async (id) => {
+    try {
+      // Find children and disconnect them
+      const childRecords = data.records.filter(r => r.parentRecordId === id);
+      for (const child of childRecords) {
+        await supabase.from('records').update({ parentRecordId: null }).eq('id', child.id);
+      }
+
+      const { error } = await supabase.from('records').delete().eq('id', id);
+      if (error) throw error;
+
+      refetchAllData();
+    } catch (err) {
+      console.error("Error deleting record:", err);
+      alert("일정을 삭제하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleMoveRecord = (recordId, kind, newDate, newTime) => {
-    updateData(prev => {
-      const records = prev.records.map(r => {
-        if (r.id === recordId) {
-          if (kind === 'explanation') {
-            return { ...r, explanationDate: newDate, explanationTime: newTime };
-          } else {
-            return { ...r, examDate: newDate, examTime: newTime };
-          }
-        }
-        return r;
-      });
-      return { ...prev, records };
-    });
+  const handleMoveRecord = async (recordId, kind, newDate, newTime) => {
+    try {
+      const updateFields = kind === 'explanation' 
+        ? { explanationDate: newDate, explanationTime: newTime }
+        : { examDate: newDate, examTime: newTime };
+
+      const { error } = await supabase.from('records').update(updateFields).eq('id', recordId);
+      if (error) throw error;
+
+      refetchAllData();
+    } catch (err) {
+      console.error("Error moving record:", err);
+      alert("일정을 이동하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
   // Patient operations
-  const handleSavePatient = (p) => {
-    updateData(prev => {
-      const exists = prev.patients.some(x => x.id === p.id);
-      const patients = exists
-        ? prev.patients.map(x => x.id === p.id ? p : x)
-        : [...prev.patients, p];
-      return { ...prev, patients };
-    });
+  const handleSavePatient = async (p) => {
+    try {
+      const { error } = await supabase.from('patients').upsert(p);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error saving patient:", err);
+      alert("환자 정보를 저장하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleDeletePatient = (id) => {
-    updateData(prev => {
-      const patients = prev.patients.filter(x => x.id !== id);
-      const records = prev.records.filter(r => r.patientId !== id);
-      return { ...prev, patients, records };
-    });
+  const handleDeletePatient = async (id) => {
+    try {
+      // Delete associated records first
+      const { error: recError } = await supabase.from('records').delete().eq('patientId', id);
+      if (recError) throw recError;
+
+      const { error } = await supabase.from('patients').delete().eq('id', id);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error deleting patient:", err);
+      alert("환자를 삭제하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
   // Staff operations
-  const handleSaveDoctor = (doc) => {
-    updateData(prev => {
-      const exists = prev.doctors.some(x => x.id === doc.id);
-      const doctors = exists
-        ? prev.doctors.map(x => x.id === doc.id ? doc : x)
-        : [...prev.doctors, doc];
-      return { ...prev, doctors };
-    });
+  const handleSaveDoctor = async (doc) => {
+    try {
+      const { error } = await supabase.from('doctors').upsert(doc);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error saving doctor:", err);
+      alert("의사 정보를 저장하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleDeleteDoctor = (id) => {
-    updateData(prev => {
-      const doctors = prev.doctors.filter(x => x.id !== id);
-      const records = prev.records.map(r => {
-        let u = { ...r };
-        if (u.orderDoctorId === id) u.orderDoctorId = '';
-        if (u.examDoctorId === `d:${id}` || u.examDoctorId === id) u.examDoctorId = '';
-        if (u.primaryExplDoctorId === id) u.primaryExplDoctorId = '';
-        if (u.secondaryExplDoctorId === id) u.secondaryExplDoctorId = '';
-        return u;
-      });
-      return { ...prev, doctors, records };
-    });
+  const handleDeleteDoctor = async (id) => {
+    try {
+      // Clear references in records
+      const orderRecords = data.records.filter(r => r.orderDoctorId === id);
+      for (const r of orderRecords) {
+        await supabase.from('records').update({ orderDoctorId: '' }).eq('id', r.id);
+      }
+      const examRecords = data.records.filter(r => r.examDoctorId === `d:${id}` || r.examDoctorId === id);
+      for (const r of examRecords) {
+        await supabase.from('records').update({ examDoctorId: '' }).eq('id', r.id);
+      }
+      const expl1Records = data.records.filter(r => r.primaryExplDoctorId === id);
+      for (const r of expl1Records) {
+        await supabase.from('records').update({ primaryExplDoctorId: '' }).eq('id', r.id);
+      }
+      const expl2Records = data.records.filter(r => r.secondaryExplDoctorId === id);
+      for (const r of expl2Records) {
+        await supabase.from('records').update({ secondaryExplDoctorId: '' }).eq('id', r.id);
+      }
+
+      const { error } = await supabase.from('doctors').delete().eq('id', id);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error deleting doctor:", err);
+      alert("의사 정보를 삭제하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleSaveNurse = (nur) => {
-    updateData(prev => {
-      const exists = prev.nurses.some(x => x.id === nur.id);
-      const nurses = exists
-        ? prev.nurses.map(x => x.id === nur.id ? nur : x)
-        : [...prev.nurses, nur];
-      return { ...prev, nurses };
-    });
+  const handleSaveNurse = async (nur) => {
+    try {
+      const { error } = await supabase.from('nurses').upsert(nur);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error saving nurse:", err);
+      alert("간호사 정보를 저장하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleDeleteNurse = (id) => {
-    updateData(prev => {
-      const nurses = prev.nurses.filter(x => x.id !== id);
-      const records = prev.records.map(r => {
-        let u = { ...r };
-        if (u.examDoctorId === `n:${id}`) u.examDoctorId = '';
-        return u;
-      });
-      return { ...prev, nurses, records };
-    });
+  const handleDeleteNurse = async (id) => {
+    try {
+      const examRecords = data.records.filter(r => r.examDoctorId === `n:${id}`);
+      for (const r of examRecords) {
+        await supabase.from('records').update({ examDoctorId: '' }).eq('id', r.id);
+      }
+
+      const { error } = await supabase.from('nurses').delete().eq('id', id);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error deleting nurse:", err);
+      alert("간호사 정보를 삭제하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
   // Exam type operations
-  const handleSaveExamType = (t) => {
-    updateData(prev => {
-      const exists = prev.examTypes.some(x => x.id === t.id);
-      const examTypes = exists
-        ? prev.examTypes.map(x => x.id === t.id ? t : x)
-        : [...prev.examTypes, t];
-      return { ...prev, examTypes };
-    });
+  const handleSaveExamType = async (t) => {
+    try {
+      const { error } = await supabase.from('exam_types').upsert(t);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error saving exam type:", err);
+      alert("검사 종류를 저장하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
 
-  const handleDeleteExamType = (id) => {
-    updateData(prev => {
-      const examTypes = prev.examTypes.filter(x => x.id !== id);
-      const records = prev.records.filter(r => r.examTypeId !== id);
-      return { ...prev, examTypes, records };
-    });
+  const handleDeleteExamType = async (id) => {
+    try {
+      // Delete associated records first
+      const { error: recError } = await supabase.from('records').delete().eq('examTypeId', id);
+      if (recError) throw recError;
+
+      const { error } = await supabase.from('exam_types').delete().eq('id', id);
+      if (error) throw error;
+      refetchAllData();
+    } catch (err) {
+      console.error("Error deleting exam type:", err);
+      alert("검사 종류를 삭제하는 중 오류가 발생했습니다: " + err.message);
+    }
   };
+
+  // Setting actions
+  const handleImportData = async (newData) => {
+    try {
+      // Clear current data first
+      await Promise.all([
+        supabase.from('records').delete().neq('id', 'placeholder'),
+        supabase.from('patients').delete().neq('id', 'placeholder'),
+        supabase.from('doctors').delete().neq('id', 'placeholder'),
+        supabase.from('nurses').delete().neq('id', 'placeholder'),
+        supabase.from('exam_types').delete().neq('id', 'placeholder')
+      ]);
+      
+      // Load imports
+      if (newData.doctors.length > 0) await supabase.from('doctors').insert(newData.doctors);
+      if (newData.nurses.length > 0) await supabase.from('nurses').insert(newData.nurses);
+      if (newData.examTypes.length > 0) await supabase.from('exam_types').insert(newData.examTypes);
+      if (newData.patients.length > 0) await supabase.from('patients').insert(newData.patients);
+      if (newData.records.length > 0) await supabase.from('records').insert(newData.records);
+
+      refetchAllData();
+      alert('백업 데이터 복원이 성공적으로 완료되었습니다.');
+    } catch (err) {
+      console.error("Error importing backup:", err);
+      alert("백업 복원 중 오류가 발생했습니다: " + err.message);
+    }
+  };
+
+  const handleClearData = async () => {
+    try {
+      await Promise.all([
+        supabase.from('records').delete().neq('id', 'placeholder'),
+        supabase.from('patients').delete().neq('id', 'placeholder'),
+        supabase.from('doctors').delete().neq('id', 'placeholder'),
+        supabase.from('nurses').delete().neq('id', 'placeholder'),
+        supabase.from('exam_types').delete().neq('id', 'placeholder')
+      ]);
+      refetchAllData();
+      alert('모든 데이터베이스 내용이 삭제되었습니다.');
+    } catch (err) {
+      console.error("Error clearing database:", err);
+      alert("데이터베이스 초기화 중 오류가 발생했습니다: " + err.message);
+    }
+  };
+
+  const handleLoadSampleData = async () => {
+    try {
+      const sample = getSampleData();
+      
+      // Clear database first
+      await Promise.all([
+        supabase.from('records').delete().neq('id', 'placeholder'),
+        supabase.from('patients').delete().neq('id', 'placeholder'),
+        supabase.from('doctors').delete().neq('id', 'placeholder'),
+        supabase.from('nurses').delete().neq('id', 'placeholder'),
+        supabase.from('exam_types').delete().neq('id', 'placeholder')
+      ]);
+      
+      // Load samples
+      const [docsRes, nursRes, etRes, patsRes] = await Promise.all([
+        supabase.from('doctors').insert(sample.doctors),
+        supabase.from('nurses').insert(sample.nurses),
+        supabase.from('exam_types').insert(sample.examTypes),
+        supabase.from('patients').insert(sample.patients)
+      ]);
+
+      if (docsRes.error || nursRes.error || etRes.error || patsRes.error) {
+        throw docsRes.error || nursRes.error || etRes.error || patsRes.error;
+      }
+
+      const { error: recError } = await supabase.from('records').insert(sample.records);
+      if (recError) throw recError;
+
+      refetchAllData();
+      alert('샘플 데모 데이터를 성공적으로 로드했습니다.');
+    } catch (err) {
+      console.error("Error loading sample data:", err);
+      alert("샘플 데이터 로딩 중 오류가 발생했습니다: " + err.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600 font-semibold text-sm">
+        <div className="flex flex-col items-center gap-2">
+          <Activity className="w-8 h-8 text-blue-600 animate-pulse" />
+          데이터베이스 조회 중...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col sm:flex-row text-slate-800">
@@ -2246,7 +2415,7 @@ export default function App() {
         </nav>
 
         <div className="pt-4 border-t border-slate-800 mt-auto text-[11px] text-slate-500 shrink-0">
-          Medical Exam Scheduler v2.1
+          Medical Exam Scheduler v2.5 (Supabase Sync)
         </div>
       </aside>
 
