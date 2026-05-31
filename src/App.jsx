@@ -2067,29 +2067,39 @@ export default function App() {
   const [defaultTime, setDefaultTime] = useState('');
   const [selectedEntryKind, setSelectedEntryKind] = useState('exam');
 
-  // Load all data from Supabase
+  // Load all data from Supabase (only active, non-deleted records)
   const loadAllFromSupabase = async () => {
-    const [pats, docs, nurs, etypes, recs] = await Promise.all([
-      supabase.from('patients').select('*'),
-      supabase.from('doctors').select('*'),
-      supabase.from('nurses').select('*'),
-      supabase.from('exam_types').select('*'),
-      supabase.from('records').select('*')
-    ]);
-    
-    if (pats.error || docs.error || nurs.error || etypes.error || recs.error) {
-      const err = pats.error || docs.error || nurs.error || etypes.error || recs.error;
+    const fetchTable = async (table) => {
+      const { data, error } = await supabase.from(table).select('*').eq('is_deleted', false);
+      if (error) {
+        // If is_deleted column doesn't exist yet, fallback to selecting all rows
+        const fallback = await supabase.from(table).select('*');
+        if (fallback.error) throw fallback.error;
+        return fallback.data || [];
+      }
+      return data || [];
+    };
+
+    try {
+      const [pats, docs, nurs, etypes, recs] = await Promise.all([
+        fetchTable('patients'),
+        fetchTable('doctors'),
+        fetchTable('nurses'),
+        fetchTable('exam_types'),
+        fetchTable('records')
+      ]);
+      
+      return {
+        patients: pats,
+        doctors: docs,
+        nurses: nurs,
+        examTypes: etypes,
+        records: recs
+      };
+    } catch (err) {
       console.error("Error loading data from Supabase:", err);
       throw err;
     }
-    
-    return {
-      patients: pats.data || [],
-      doctors: docs.data || [],
-      nurses: nurs.data || [],
-      examTypes: etypes.data || [],
-      records: recs.data || []
-    };
   };
 
   const refetchAllData = async () => {
@@ -2227,7 +2237,20 @@ export default function App() {
     }
   };
 
+  // Admin password check helper for deletion
+  const verifyAdminPassword = () => {
+    const entered = prompt("데이터를 삭제하시려면 관리자 비밀번호를 입력해 주세요:");
+    if (entered === null) return false; // User cancelled
+    const adminPassword = import.meta.env.VITE_ADMIN_DELETE_PASSWORD || "admin1234";
+    if (entered !== adminPassword) {
+      alert("비밀번호가 일치하지 않습니다. 삭제가 취소되었습니다.");
+      return false;
+    }
+    return true;
+  };
+
   const handleDeleteRecord = async (id) => {
+    if (!verifyAdminPassword()) return;
     try {
       // Find children and disconnect them
       const childRecords = data.records.filter(r => r.parentRecordId === id);
@@ -2235,7 +2258,8 @@ export default function App() {
         await supabase.from('records').update({ parentRecordId: null }).eq('id', child.id);
       }
 
-      const { error } = await supabase.from('records').delete().eq('id', id);
+      // Soft delete: update is_deleted to true instead of deleting the row
+      const { error } = await supabase.from('records').update({ is_deleted: true }).eq('id', id);
       if (error) throw error;
 
       refetchAllData();
@@ -2274,12 +2298,14 @@ export default function App() {
   };
 
   const handleDeletePatient = async (id) => {
+    if (!verifyAdminPassword()) return;
     try {
-      // Delete associated records first
-      const { error: recError } = await supabase.from('records').delete().eq('patientId', id);
+      // Soft-delete associated records first
+      const { error: recError } = await supabase.from('records').update({ is_deleted: true }).eq('patientId', id);
       if (recError) throw recError;
 
-      const { error } = await supabase.from('patients').delete().eq('id', id);
+      // Soft delete patient
+      const { error } = await supabase.from('patients').update({ is_deleted: true }).eq('id', id);
       if (error) throw error;
       refetchAllData();
     } catch (err) {
@@ -2301,6 +2327,7 @@ export default function App() {
   };
 
   const handleDeleteDoctor = async (id) => {
+    if (!verifyAdminPassword()) return;
     try {
       // Clear references in records
       const orderRecords = data.records.filter(r => r.orderDoctorId === id);
@@ -2320,7 +2347,8 @@ export default function App() {
         await supabase.from('records').update({ secondaryExplDoctorId: '' }).eq('id', r.id);
       }
 
-      const { error } = await supabase.from('doctors').delete().eq('id', id);
+      // Soft delete doctor
+      const { error } = await supabase.from('doctors').update({ is_deleted: true }).eq('id', id);
       if (error) throw error;
       refetchAllData();
     } catch (err) {
@@ -2341,13 +2369,15 @@ export default function App() {
   };
 
   const handleDeleteNurse = async (id) => {
+    if (!verifyAdminPassword()) return;
     try {
       const examRecords = data.records.filter(r => r.examDoctorId === `n:${id}`);
       for (const r of examRecords) {
         await supabase.from('records').update({ examDoctorId: '' }).eq('id', r.id);
       }
 
-      const { error } = await supabase.from('nurses').delete().eq('id', id);
+      // Soft delete nurse
+      const { error } = await supabase.from('nurses').update({ is_deleted: true }).eq('id', id);
       if (error) throw error;
       refetchAllData();
     } catch (err) {
@@ -2369,12 +2399,14 @@ export default function App() {
   };
 
   const handleDeleteExamType = async (id) => {
+    if (!verifyAdminPassword()) return;
     try {
-      // Delete associated records first
-      const { error: recError } = await supabase.from('records').delete().eq('examTypeId', id);
+      // Soft-delete associated records first
+      const { error: recError } = await supabase.from('records').update({ is_deleted: true }).eq('examTypeId', id);
       if (recError) throw recError;
 
-      const { error } = await supabase.from('exam_types').delete().eq('id', id);
+      // Soft delete exam type
+      const { error } = await supabase.from('exam_types').update({ is_deleted: true }).eq('id', id);
       if (error) throw error;
       refetchAllData();
     } catch (err) {
