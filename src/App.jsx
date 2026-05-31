@@ -701,12 +701,20 @@ function EventCard({ entry, data, onClick, onDragStart, onMoveClick }) {
     }
   }
 
+  const isCompletedExam = entry.kind === 'exam' && entry.status === 'completed';
+
   return (
     <div
-      draggable
+      draggable={!isCompletedExam}
       onClick={onClick}
-      onDragStart={onDragStart}
-      className={`${c.bg} ${c.text} border-l-4 ${c.border} rounded-lg pl-3 pr-1 py-2 cursor-pointer active:brightness-90 hover:brightness-95 hover:shadow-sm transition w-full sm:min-w-[200px] sm:max-w-[280px] sm:flex-1 flex items-start gap-2`}
+      onDragStart={(ev) => {
+        if (isCompletedExam) {
+          ev.preventDefault();
+          return;
+        }
+        onDragStart(ev);
+      }}
+      className={`${c.bg} ${c.text} border-l-4 ${c.border} rounded-lg pl-3 pr-1 py-2 ${isCompletedExam ? 'cursor-default' : 'cursor-pointer active:brightness-90 hover:brightness-95 hover:shadow-sm'} transition w-full sm:min-w-[200px] sm:max-w-[280px] sm:flex-1 flex items-start gap-2`}
       title={`${entry.patient.initials} - ${entry.examType.name}`}
     >
       <div className="flex-1 min-w-0">
@@ -726,14 +734,16 @@ function EventCard({ entry, data, onClick, onDragStart, onMoveClick }) {
           {docInfo && <><span>·</span><span className="truncate">{docInfo}</span></>}
         </div>
       </div>
-      <button
-        onClick={onMoveClick}
-        className="shrink-0 p-1.5 rounded hover:bg-white/40 active:bg-white/60 -my-0.5"
-        title="다른 시간/날짜로 이동"
-        aria-label="이동"
-      >
-        <Move className="w-3.5 h-3.5 opacity-70" />
-      </button>
+      {!isCompletedExam && (
+        <button
+          onClick={onMoveClick}
+          className="shrink-0 p-1.5 rounded hover:bg-white/40 active:bg-white/60 -my-0.5"
+          title="다른 시간/날짜로 이동"
+          aria-label="이동"
+        >
+          <Move className="w-3.5 h-3.5 opacity-70" />
+        </button>
+      )}
     </div>
   );
 }
@@ -831,13 +841,21 @@ function MonthView({ cur, entries, onDayClick, onEditEntry, onMoveEntry }) {
               <div className="hidden sm:block space-y-1">
                 {dayEntries.slice(0, 4).map(e => {
                   const c = entryColor(e);
+                  const isCompleted = e.kind === 'exam' && e.status === 'completed';
                   return (
                     <div
                       key={e.key}
-                      draggable
+                      draggable={!isCompleted}
                       onClick={(ev) => { ev.stopPropagation(); onEditEntry(e); }}
-                      onDragStart={(ev) => { ev.stopPropagation(); onEntryDragStart(ev, e); }}
-                      className={`group ${c.bg} ${c.text} border-l-2 ${c.border} px-1.5 py-1 rounded text-[11px] leading-tight cursor-grab active:cursor-grabbing hover:brightness-95 transition`}
+                      onDragStart={(ev) => {
+                        if (isCompleted) {
+                          ev.preventDefault();
+                          return;
+                        }
+                        ev.stopPropagation();
+                        onEntryDragStart(ev, e);
+                      }}
+                      className={`group ${c.bg} ${c.text} border-l-2 ${c.border} px-1.5 py-1 rounded text-[11px] leading-tight ${isCompleted ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} hover:brightness-95 transition`}
                       title={`${e.time || '시간 미정'} ${e.patient.initials} - ${e.examType.name}`}
                     >
                       <div className="flex items-center gap-1 font-bold">
@@ -2270,6 +2288,13 @@ export default function App() {
   };
 
   const handleMoveRecord = async (recordId, kind, newDate, newTime) => {
+    // Prevent moving completed exam date
+    const record = data.records.find(r => r.id === recordId);
+    if (record && record.examStatus === 'completed' && kind === 'exam') {
+      alert("이미 완료된 검사의 일정은 변경할 수 없습니다.");
+      return;
+    }
+
     try {
       const updateFields = kind === 'explanation' 
         ? { explanationDate: newDate, explanationTime: newTime }
