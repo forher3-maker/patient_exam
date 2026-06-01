@@ -2292,22 +2292,7 @@ export default function App() {
     const init = async () => {
       try {
         const d = await loadAllFromSupabase();
-        // If the database is completely empty, initialize it with sample data
-        if (d.patients.length === 0 && d.doctors.length === 0 && d.examTypes.length === 0) {
-          console.log("Supabase database empty. Inserting sample data...");
-          const sample = getSampleData();
-          await Promise.all([
-            supabase.from('doctors').insert(sample.doctors),
-            supabase.from('nurses').insert(sample.nurses),
-            supabase.from('exam_types').insert(sample.examTypes),
-            supabase.from('patients').insert(sample.patients)
-          ]);
-          await supabase.from('records').insert(sample.records);
-          const freshData = await loadAllFromSupabase();
-          setData(freshData);
-        } else {
-          setData(d);
-        }
+        setData(d);
       } catch (err) {
         console.error("Initialization failed, check your Supabase credentials.", err);
       } finally {
