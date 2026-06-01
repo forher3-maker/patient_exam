@@ -2668,6 +2668,7 @@ export default function App() {
   };
 
   const handleClearData = async () => {
+    if (!verifyAdminPassword()) return;
     try {
       await Promise.all([
         supabase.from('records').delete().neq('id', 'placeholder'),
@@ -2685,6 +2686,7 @@ export default function App() {
   };
 
   const handleLoadSampleData = async () => {
+    if (!verifyAdminPassword()) return;
     try {
       const sample = getSampleData();
       
