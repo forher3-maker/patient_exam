@@ -884,7 +884,11 @@ function MonthView({ cur, entries, onDayClick, onEditEntry, onMoveEntry }) {
 function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKind, data, onSave, onDelete }) {
   const [form, setForm] = useState(null);
   const [confirmDel, setConfirmDel] = useState(false);
-  useEffect(() => { if (!open) setConfirmDel(false); }, [open]);
+  const [intervalInput, setIntervalInput] = useState('');
+
+  useEffect(() => {
+    if (!open) setConfirmDel(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -912,6 +916,20 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
     }
   }, [open, record, defaultDate, defaultTime]);
 
+  useEffect(() => {
+    if (form?.patientId && form?.examTypeId) {
+      const patient = data.patients.find(p => p.id === form.patientId);
+      const custom = patient?.assignedExams?.find(ae => ae.examTypeId === form.examTypeId);
+      if (custom) {
+        setIntervalInput(String(custom.intervalDays));
+      } else {
+        setIntervalInput('');
+      }
+    } else {
+      setIntervalInput('');
+    }
+  }, [form?.patientId, form?.examTypeId, data.patients]);
+
   if (!open || !form) return null;
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
@@ -921,18 +939,17 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
   const isExplanationEntry = entryKind === 'explanation';
   const examTypeLocked = isExplanationEntry || isAutoNext;
   const examPatient = data.patients.find(p => p.id === form.patientId);
-  const customExam = examPatient?.assignedExams?.find(ae => ae.examTypeId === form.examTypeId);
   
-  // Calculate interval to display as notice
-  const activeInterval = customExam && customExam.intervalDays > 0 
-    ? customExam.intervalDays 
+  // Calculate interval to display as notice, dynamically taking the user's current input into account
+  const activeInterval = intervalInput !== ''
+    ? (parseInt(intervalInput, 10) || 0)
     : (examType?.intervalDays || 0);
 
   const canSave = form.patientId && form.examTypeId && form.examDate;
 
   const handleSave = () => {
     if (!canSave) return;
-    onSave(form);
+    onSave(form, intervalInput);
     onClose();
   };
 
@@ -982,7 +999,7 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
             hint={
               isExplanationEntry ? '검사 종류는 검사 일정에서만 변경할 수 있습니다.'
               : isAutoNext ? '자동 예약 검사는 원본 검사의 종류와 자동 동기화됩니다.'
-              : (activeInterval ? `이 환자의 예약 주기: ${activeInterval}일` : undefined)
+              : undefined
             }
           >
             <Select
@@ -1044,76 +1061,116 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
           </div>
         </div>
 
-        <div className="border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <MessageSquare className="w-4 h-4 text-purple-600" />
-            <div className="text-sm font-bold text-slate-800">결과 설명</div>
+      <div className="border border-slate-200 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Repeat className="w-4 h-4 text-amber-600" />
+          <div className="text-sm font-bold text-slate-800">다음 검사 주기 설정</div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field
+            label="맞춤 검사 주기 (일)"
+            hint={
+              !form.patientId || !form.examTypeId
+                ? '환자와 검사 종류를 선택하면 활성화됩니다.'
+                : examType
+                ? `기본 검사 주기: ${examType.intervalDays || 0}일`
+                : undefined
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                type="text"
+                placeholder={
+                  !form.patientId || !form.examTypeId
+                    ? '환자/검사 종류를 선택하세요'
+                    : examType
+                    ? String(examType.intervalDays || 0)
+                    : '주기 입력'
+                }
+                value={intervalInput}
+                onChange={e => setIntervalInput(e.target.value.replace(/[^0-9]/g, ''))}
+                disabled={!form.patientId || !form.examTypeId}
+                className="w-full font-semibold disabled:bg-slate-50 disabled:text-slate-400"
+              />
+              <span className="text-sm font-semibold text-slate-600 shrink-0">일</span>
+            </div>
+          </Field>
+          <div className="flex items-center text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3">
+            {!form.patientId || !form.examTypeId ? (
+              <div>환자와 검사 종류를 선택하시면 자동으로 다음 검사일이 계산됩니다.</div>
+            ) : activeInterval > 0 ? (
+              <div>
+                검사 상태를 <strong>'완료'</strong>로 저장 시, <strong>{activeInterval}일 뒤</strong>인{' '}
+                <strong className="text-blue-600">{addDays(form.examDate || today(), activeInterval)}</strong>에{' '}
+                다음 검사(자동 예약)가 자동으로 캘린더에 표시됩니다.
+              </div>
+            ) : (
+              <div>주기가 설정되지 않아 검사 완료 시에도 다음 예약 일정이 자동 생성되지 않습니다.</div>
+            )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="설명 날짜" hint="비워두면 미예약">
-              <Input type="date" value={form.explanationDate || ''} onChange={e => set('explanationDate', e.target.value)} />
-            </Field>
-            <Field label="설명 시간">
+        </div>
+      </div>
+
+      <div className="border border-slate-200 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <MessageSquare className="w-4 h-4 text-purple-600" />
+          <div className="text-sm font-bold text-slate-800">결과 설명</div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="설명 날짜" hint="비워두면 미예약">
+            <Input type="date" value={form.explanationDate || ''} onChange={e => set('explanationDate', e.target.value)} />
+          </Field>
+          <Field label="설명 시간">
+            <Select
+              placeholder="시간 미정"
+              value={form.explanationTime || ''}
+              onChange={v => set('explanationTime', v)}
+              options={HOURS.map(h => ({ value: h, label: h }))}
+              className="w-full"
+            />
+          </Field>
+          <Field label="정(主) 설명 의사">
+            <Select placeholder="선택" value={form.primaryExplDoctorId} onChange={v => set('primaryExplDoctorId', v)} options={docOpts} className="w-full" />
+          </Field>
+          <Field label="부(副) 설명 의사">
+            <Select placeholder="선택" value={form.secondaryExplDoctorId} onChange={v => set('secondaryExplDoctorId', v)} options={docOpts} className="w-full" />
+          </Field>
+        </div>
+        {form.explanationDate && (
+          <div className="mt-4">
+            <Field label="설명 상태">
               <Select
-                placeholder="시간 미정"
-                value={form.explanationTime || ''}
-                onChange={v => set('explanationTime', v)}
-                options={HOURS.map(h => ({ value: h, label: h }))}
+                value={form.explanationStatus}
+                onChange={v => set('explanationStatus', v)}
+                options={[{ value: 'none', label: '미예약' }, { value: 'scheduled', label: '예정' }, { value: 'completed', label: '완료' }]}
                 className="w-full"
               />
             </Field>
-            <Field label="정(主) 설명 의사">
-              <Select placeholder="선택" value={form.primaryExplDoctorId} onChange={v => set('primaryExplDoctorId', v)} options={docOpts} className="w-full" />
-            </Field>
-            <Field label="부(副) 설명 의사">
-              <Select placeholder="선택" value={form.secondaryExplDoctorId} onChange={v => set('secondaryExplDoctorId', v)} options={docOpts} className="w-full" />
-            </Field>
-          </div>
-          {form.explanationDate && (
-            <div className="mt-4">
-              <Field label="설명 상태">
-                <Select
-                  value={form.explanationStatus}
-                  onChange={v => set('explanationStatus', v)}
-                  options={[{ value: 'none', label: '미예약' }, { value: 'scheduled', label: '예정' }, { value: 'completed', label: '완료' }]}
-                  className="w-full"
-                />
-              </Field>
-            </div>
-          )}
-        </div>
-
-        <Field label="메모">
-          <textarea
-            value={form.notes || ''}
-            onChange={e => set('notes', e.target.value)}
-            rows={2}
-            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white text-slate-900"
-            placeholder="특이사항 등 자유 메모"
-          />
-        </Field>
-
-        {!isEdit && activeInterval > 0 && form.examDate && (
-          <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-            <Repeat className="w-4 h-4 shrink-0 mt-0.5" />
-            <div>
-              <div className="font-semibold">자동 예약 알림</div>
-              <div className="mt-0.5">검사 종료 후 <strong>{activeInterval}일 뒤</strong>인 <strong>{addDays(form.examDate, activeInterval)}</strong>에 다음 검사가 자동으로 캘린더에 표시됩니다.</div>
-            </div>
-          </div>
-        )}
-
-        {isEdit && !examTypeLocked && record && record.examTypeId !== form.examTypeId && (
-          <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
-            <Repeat className="w-4 h-4 shrink-0 mt-0.5" />
-            <div>
-              <div className="font-semibold">검사 종류 변경 알림</div>
-              <div className="mt-0.5">검사 종류를 변경하면 기존의 자동 예약 설정 및 검사 표준 간격이 다르게 계산될 수 있습니다.</div>
-            </div>
           </div>
         )}
       </div>
-    </Modal>
+
+      <Field label="메모">
+        <textarea
+          value={form.notes || ''}
+          onChange={e => set('notes', e.target.value)}
+          rows={2}
+          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white text-slate-900"
+          placeholder="특이사항 등 자유 메모"
+        />
+      </Field>
+
+      {isEdit && !examTypeLocked && record && record.examTypeId !== form.examTypeId && (
+        <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
+          <Repeat className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold">검사 종류 변경 알림</div>
+            <div className="mt-0.5">검사 종류를 변경하면 기존의 자동 예약 설정 및 검사 표준 간격이 다르게 계산될 수 있습니다.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  </Modal>
   );
 }
 
@@ -2215,12 +2272,53 @@ export default function App() {
   };
 
   // Record operations
-  const handleSaveRecord = async (r) => {
+  const handleSaveRecord = async (r, nextIntervalDays) => {
     let recordToSave = { ...r };
     let newAutoRecord = null;
 
     if (!recordToSave.id) {
       recordToSave.id = uid();
+    }
+
+    // Update patient custom exam interval if provided
+    let updatedPatients = data.patients;
+    if (nextIntervalDays !== undefined && nextIntervalDays !== null && recordToSave.patientId && recordToSave.examTypeId) {
+      const patient = data.patients.find(p => p.id === recordToSave.patientId);
+      if (patient) {
+        let assigned = [...(patient.assignedExams || [])];
+        const idx = assigned.findIndex(ae => ae.examTypeId === recordToSave.examTypeId);
+        const daysVal = nextIntervalDays === '' ? 0 : parseInt(nextIntervalDays, 10);
+        
+        let changed = false;
+        if (daysVal > 0) {
+          if (idx >= 0) {
+            if (assigned[idx].intervalDays !== daysVal) {
+              assigned[idx] = { ...assigned[idx], intervalDays: daysVal };
+              changed = true;
+            }
+          } else {
+            assigned.push({ examTypeId: recordToSave.examTypeId, intervalDays: daysVal });
+            changed = true;
+          }
+        } else {
+          // If empty/0, delete custom interval to fall back to default
+          if (idx >= 0) {
+            assigned.splice(idx, 1);
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          try {
+            const updatedPatient = { ...patient, assignedExams: assigned };
+            const { error: patientErr } = await supabase.from('patients').upsert(updatedPatient);
+            if (patientErr) throw patientErr;
+            updatedPatients = data.patients.map(p => p.id === patient.id ? updatedPatient : p);
+          } catch (err) {
+            console.error("Error updating patient custom interval:", err);
+          }
+        }
+      }
     }
 
     const isEdit = !!r.id;
@@ -2229,12 +2327,12 @@ export default function App() {
       const autoGenNeeded = r.examStatus === 'completed' && (!oldRecord || oldRecord.examStatus !== 'completed');
       
       if (autoGenNeeded) {
-        newAutoRecord = processAutoNext(recordToSave, data);
+        newAutoRecord = processAutoNext(recordToSave, { ...data, patients: updatedPatients });
         if (newAutoRecord) recordToSave.autoNextGenerated = true;
       }
     } else {
       if (recordToSave.examStatus === 'completed') {
-        newAutoRecord = processAutoNext(recordToSave, data);
+        newAutoRecord = processAutoNext(recordToSave, { ...data, patients: updatedPatients });
         if (newAutoRecord) recordToSave.autoNextGenerated = true;
       }
     }
