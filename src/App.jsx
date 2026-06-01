@@ -216,6 +216,105 @@ function MultiSelectDept({ value, onChange, allOptions, className = '' }) {
   );
 }
 
+// ====== Searchable Select dropdown (with filtering & alphabetical sort) ======
+function SearchableSelect({ options, value, onChange, placeholder = '선택', className = '', disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    if (open) {
+      document.addEventListener('mousedown', handler);
+      document.addEventListener('touchstart', handler);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) setSearch('');
+  }, [open]);
+
+  const selectedOpt = options.find(o => o.value === value);
+  const filtered = options.filter(o =>
+    o.label.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled}
+        className={`w-full px-3 py-2 text-sm border rounded-lg bg-white text-left flex items-center justify-between gap-1 transition-colors ${
+          disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200' : 'border-slate-300 text-slate-800 hover:bg-slate-50'
+        }`}
+      >
+        <span className="truncate">{selectedOpt ? selectedOpt.label : placeholder}</span>
+        <ChevronDown className={`w-4 h-4 shrink-0 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 flex flex-col max-h-[260px]" style={{ minWidth: '220px' }}>
+          <div className="p-2 border-b border-slate-100 bg-slate-50 sticky top-0">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="검색어 입력..."
+                className="w-full pl-8 pr-8 py-1.5 text-xs border border-slate-200 rounded bg-white text-slate-850 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent"
+                autoFocus
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2 top-2 p-0.5 rounded-full hover:bg-slate-150 text-slate-400 hover:text-slate-650"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-0 py-1">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-xs text-slate-400 text-center">검색 결과가 없습니다</div>
+            ) : (
+              filtered.map(o => {
+                const isSelected = o.value === value;
+                return (
+                  <button
+                    type="button"
+                    key={o.value}
+                    onClick={() => {
+                      onChange(o.value);
+                      setOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs transition-colors ${
+                      isSelected ? 'bg-blue-50 text-blue-900 font-semibold' : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <span className="truncate">{o.label}</span>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ====== Helpers for records ======
 function deriveEntries(records, patients, examTypes) {
   const entries = [];
@@ -288,7 +387,8 @@ function CalendarView({ data, onCreate, onEditEntry, onMoveEntry }) {
   }, [allEntries, deptFilter, filterPatient]);
 
   const patientFilterOptions = useMemo(() => {
-    let pats = data.patients;
+    let pats = [...data.patients];
+    pats.sort((a, b) => a.initials.localeCompare(b.initials, 'ko'));
     if (deptFilter.length > 0) {
       pats = pats.filter(p => {
         const depts = p.departments || (p.department ? [p.department] : []);
@@ -383,7 +483,7 @@ function CalendarView({ data, onCreate, onEditEntry, onMoveEntry }) {
             allOptions={DEPARTMENTS}
             className="w-40"
           />
-          <Select
+          <SearchableSelect
             placeholder="환자 (전체)"
             value={filterPatient}
             onChange={setFilterPatient}
@@ -982,14 +1082,16 @@ function RecordModal({ open, onClose, record, defaultDate, defaultTime, entryKin
       <div className="space-y-5">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field label="환자" required>
-            <Select
+            <SearchableSelect
               placeholder="환자 선택"
               value={form.patientId}
               onChange={v => set('patientId', v)}
-              options={data.patients.map(p => {
-                const depts = p.departments || (p.department ? [p.department] : []);
-                return { value: p.id, label: `${p.initials}${depts.length ? ` [${depts.join('/')}]` : ''} · ${p.birth6 || ''} · ${p.chartNumber || ''}` };
-              })}
+              options={[...data.patients]
+                .sort((a, b) => a.initials.localeCompare(b.initials, 'ko'))
+                .map(p => {
+                  const depts = p.departments || (p.department ? [p.department] : []);
+                  return { value: p.id, label: `${p.initials}${depts.length ? ` [${depts.join('/')}]` : ''} · ${p.birth6 || ''} · ${p.chartNumber || ''}` };
+                })}
               className="w-full"
             />
           </Field>
